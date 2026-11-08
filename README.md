@@ -106,9 +106,11 @@ fun main() {
 
 The library is available on Maven Central:
 
+```kotlin
+implementation("ru.kode:unicorn2:2.3.0")
 ```
-implementation "ru.dimsuz:unicorn2:2.1.0"
-```
+
+Versions up to 2.2.0 are published as `ru.dimsuz:unicorn2`.
 
 # License
 

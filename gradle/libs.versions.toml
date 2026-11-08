@@ -1,14 +1,15 @@
 [versions]
-koTest = "5.4.1"
-ktlint = "0.46.1"
-coroutines = "1.6.4"
-kotlin = "1.7.10"
-dokka = "1.5.31"
-turbine = "0.8.0"
-spotless = "6.9.0"
+koTest = "6.1.9"
+ktlint = "1.8.0"
+coroutines = "1.10.2"
+kotlin = "2.3.20"
+turbine = "1.2.1"
+spotless = "8.4.0"
+vanniktechMavenPublish = "0.37.0"
+ksp = "2.3.6"
 
 [libraries]
-kotest-junit-runner = { module = "io.kotest:kotest-runner-junit5-jvm", version.ref = "koTest" }
+kotest-junit-runner = { module = "io.kotest:kotest-runner-junit5", version.ref = "koTest" }
 kotest-framework-engine = { module = "io.kotest:kotest-framework-engine", version.ref = "koTest" }
 kotest-assertions-core = { module = "io.kotest:kotest-assertions-core", version.ref = "koTest" }
 kotest-property = { module = "io.kotest:kotest-property", version.ref = "koTest" }
@@ -17,11 +18,13 @@ coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", ve
 turbine = { module = "app.cash.turbine:turbine", version.ref = "turbine" }
 
 [bundles]
-koTestCommon = [ "kotest-assertions-core", "kotest-property", "kotest-framework-engine" ]
-koTestJvm = [ "kotest-junit-runner" ]
-coroutines = [ "coroutines-core" ]
+koTestCommon = ["kotest-assertions-core", "kotest-property", "kotest-framework-engine"]
+koTestJvm = ["kotest-junit-runner"]
+coroutines = ["coroutines-core"]
 
 [plugins]
-dokka = { id = "org.jetbrains.dokka", version.ref = "dokka" }
-kotlinMultiplatform = { id = "org.jetbrains.kotlin.multiplatform", version.ref = "kotlin"}
+kotlinMultiplatform = { id = "org.jetbrains.kotlin.multiplatform", version.ref = "kotlin" }
 spotless = { id = "com.diffplug.spotless", version.ref = "spotless" }
+vanniktech-maven-publish = { id = "com.vanniktech.maven.publish", version.ref = "vanniktechMavenPublish" }
+kotest = { id = "io.kotest", version.ref = "koTest" }
+ksp = { id = "com.google.devtools.ksp", version.ref = "ksp" }

@@ -12,89 +12,76 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.merge
 import kotlin.reflect.KClass
 
-public inline fun <reified S : Any> machine(
-  init: MachineDsl<S>.() -> Unit
-): Machine<S> {
+public inline fun <reified S : Any> machine(init: MachineDsl<S>.() -> Unit): Machine<S> {
   val machineDsl = MachineDsl(S::class).apply(init)
   return buildMachine(
     createMachineConfig(
-      machineDsl
-    )
+      machineDsl,
+    ),
   )
 }
 
-public inline fun <S : Any> machine(
-  stateClass: KClass<S>,
-  init: MachineDsl<S>.() -> Unit
-): Machine<S> {
+public inline fun <S : Any> machine(stateClass: KClass<S>, init: MachineDsl<S>.() -> Unit): Machine<S> {
   val machineDsl = MachineDsl(stateClass).apply(init)
   return buildMachine(
     createMachineConfig(
-      machineDsl
-    )
+      machineDsl,
+    ),
   )
 }
 
 @PublishedApi
-internal fun <S : Any> buildMachine(
-  machineConfig: MachineConfig<S>
-): Machine<S> {
-  return object : Machine<S> {
-    override val initial: Pair<S, (suspend (S) -> Unit)?> = machineConfig.initial
-    override val states: Flow<S> = buildStatesFlow(machineConfig)
-  }
+internal fun <S : Any> buildMachine(machineConfig: MachineConfig<S>): Machine<S> = object : Machine<S> {
+  override val initial: Pair<S, (suspend (S) -> Unit)?> = machineConfig.initial
+  override val states: Flow<S> = buildStatesFlow(machineConfig)
 }
 
-private fun <S : Any> buildStatesFlow(
-  machineConfig: MachineConfig<S>
-): Flow<S> {
-  return channelFlow {
-    var transitionResult = buildInitialState(machineConfig.initial)
-    send(transitionResult.state)
-    transitionResult.action?.invoke()
+private fun <S : Any> buildStatesFlow(machineConfig: MachineConfig<S>): Flow<S> = channelFlow {
+  var transitionResult = buildInitialState(machineConfig.initial)
+  send(transitionResult.state)
+  transitionResult.action?.invoke()
 
-    var subscribeToNextState = true
+  var subscribeToNextState = true
 
-    while (subscribeToNextState) {
-      val job = async {
-        machineConfig
-          .transitions
-          .filter {
-            it.stateClass.isInstance(transitionResult.state)
-          }
-          .map { config -> config.payloadSource.map { payload -> payload to config } }
-          .merge()
-          .collect { payloadBundle ->
-            val result = produceResult(transitionResult, payloadBundle)
-            if (result != null) {
-              val previousResult = transitionResult
-              transitionResult = result
-              if (previousResult.state != result.state) {
-                send(result.state)
-              }
-              result.action?.invoke()
-              if (!payloadBundle.second.stateClass.isInstance(result.state)) {
-                this.cancel(message = "sub_state_switch")
-              }
+  while (subscribeToNextState) {
+    val job = async {
+      machineConfig
+        .transitions
+        .filter {
+          it.stateClass.isInstance(transitionResult.state)
+        }
+        .map { config -> config.payloadSource.map { payload -> payload to config } }
+        .merge()
+        .collect { payloadBundle ->
+          val result = produceResult(transitionResult, payloadBundle)
+          if (result != null) {
+            val previousResult = transitionResult
+            transitionResult = result
+            if (previousResult.state != result.state) {
+              send(result.state)
+            }
+            result.action?.invoke()
+            if (!payloadBundle.second.stateClass.isInstance(result.state)) {
+              this.cancel(message = "sub_state_switch")
             }
           }
-      }
-      subscribeToNextState = try {
-        job.await()
-        // either all collects are finished (when no hot flows) or some non-cancellation exception thrown
-        false
-      } catch (e: CancellationException) {
-        e.message == "sub_state_switch"
-      } catch (e: Throwable) {
-        throw e
-      }
+        }
+    }
+    subscribeToNextState = try {
+      job.await()
+      // either all collects are finished (when no hot flows) or some non-cancellation exception thrown
+      false
+    } catch (e: CancellationException) {
+      e.message == "sub_state_switch"
+    } catch (e: Throwable) {
+      throw e
     }
   }
 }
 
 private suspend fun <S : Any> produceResult(
   stateBundle: TransitionResult<S>,
-  payloadBundle: Pair<Any?, TransitionConfig<S, S>>
+  payloadBundle: Pair<Any?, TransitionConfig<S, S>>,
 ): TransitionResult<S>? {
   val (payload, transitionConfig) = payloadBundle
   val previousState = stateBundle.state
@@ -108,16 +95,10 @@ private suspend fun <S : Any> produceResult(
   return TransitionResult(nextState, action)
 }
 
-private suspend fun <S : Any> buildInitialState(
-  config: Pair<S, (suspend (S) -> Unit)?>
-): TransitionResult<S> {
-  return TransitionResult(
+private suspend fun <S : Any> buildInitialState(config: Pair<S, (suspend (S) -> Unit)?>): TransitionResult<S> =
+  TransitionResult(
     state = config.first,
-    action = { config.second?.invoke(config.first) }
+    action = { config.second?.invoke(config.first) },
   )
-}
 
-internal data class TransitionResult<out S : Any>(
-  val state: S,
-  val action: (suspend () -> Unit)?
-)
+internal data class TransitionResult<out S : Any>(val state: S, val action: (suspend () -> Unit)?)
