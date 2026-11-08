@@ -7,6 +7,7 @@ turbine = "1.2.1"
 spotless = "8.4.0"
 vanniktechMavenPublish = "0.37.0"
 ksp = "2.3.6"
+kover = "0.9.11"
 
 [libraries]
 kotest-junit-runner = { module = "io.kotest:kotest-runner-junit5", version.ref = "koTest" }
@@ -28,3 +29,4 @@ spotless = { id = "com.diffplug.spotless", version.ref = "spotless" }
 vanniktech-maven-publish = { id = "com.vanniktech.maven.publish", version.ref = "vanniktechMavenPublish" }
 kotest = { id = "io.kotest", version.ref = "koTest" }
 ksp = { id = "com.google.devtools.ksp", version.ref = "ksp" }
+kover = { id = "org.jetbrains.kotlinx.kover", version.ref = "kover" }

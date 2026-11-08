@@ -3,6 +3,7 @@ plugins {
   alias(libs.plugins.vanniktech.maven.publish)
   alias(libs.plugins.kotest)
   alias(libs.plugins.ksp)
+  alias(libs.plugins.kover)
 }
 
 group = providers.gradleProperty("pomGroupId").get()
@@ -100,5 +101,26 @@ tasks.named<Test>("jvmTest") {
       org.gradle.api.tasks.testing.logging.TestLogEvent.STANDARD_OUT,
     )
     exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
+  }
+}
+
+kover {
+  reports {
+    filters {
+      excludes {
+        // Sample.kt is demo code living in main sources
+        classes(
+          "ru.dimsuz.unicorn2.SampleKt*",
+          "ru.dimsuz.unicorn2.CompoundState*",
+          "ru.dimsuz.unicorn2.State",
+          "ru.dimsuz.unicorn2.ViewState*",
+        )
+      }
+    }
+    verify {
+      rule {
+        minBound(100)
+      }
+    }
   }
 }

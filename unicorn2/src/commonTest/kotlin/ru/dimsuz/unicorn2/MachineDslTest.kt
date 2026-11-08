@@ -6,6 +6,7 @@ import io.kotest.core.spec.style.ShouldSpec
 import io.kotest.matchers.collections.shouldContainExactly
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.types.shouldBeInstanceOf
+import io.kotest.matchers.types.shouldBeSameInstanceAs
 import io.kotest.property.Arb
 import io.kotest.property.arbitrary.int
 import io.kotest.property.arbitrary.list
@@ -16,9 +17,11 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asFlow
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.emitAll
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.onStart
+import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.flow.updateAndGet
 import kotlin.time.ExperimentalTime
@@ -477,7 +480,158 @@ class MachineDslTest :
         }
 
         should("keep only payload sources active in a current sub-state") {
-          // TODO decide if the option to keep all connections is required
+          val eventsA = MutableSharedFlow<Int>()
+          val eventsB = MutableSharedFlow<String>()
+          val m = machine<ViewState> {
+            initial = ViewState.A(0) to null
+            whenIn<ViewState.A> {
+              onEach(eventsA) { transitionTo { _, v -> ViewState.B("b$v") } }
+            }
+            whenIn<ViewState.B> {
+              onEach(eventsB) { transitionTo { _, v -> ViewState.A(v.length) } }
+            }
+          }
+
+          m.states.test {
+            awaitItem() shouldBe ViewState.A(0)
+            eventsA.subscriptionCount.first { it == 1 }
+            eventsB.subscriptionCount.value shouldBe 0
+
+            eventsA.emit(1)
+            awaitItem() shouldBe ViewState.B("b1")
+            eventsB.subscriptionCount.first { it == 1 }
+            eventsA.subscriptionCount.first { it == 0 }
+
+            eventsB.emit("xy")
+            awaitItem() shouldBe ViewState.A(2)
+            eventsA.subscriptionCount.first { it == 1 }
+            eventsB.subscriptionCount.first { it == 0 }
+
+            // sources of a re-entered sub-state are subscribed again
+            eventsA.emit(3)
+            awaitItem() shouldBe ViewState.B("b3")
+          }
+        }
+
+        should("ignore events of a left sub-state after a top-level transition") {
+          // a top-level transition matches every state, so it doesn't restart subscriptions:
+          // A's sources stay subscribed in B and their events must be dropped
+          val topEvents = MutableSharedFlow<Unit>()
+          val eventsA = MutableSharedFlow<Int>()
+          val m = machine<ViewState> {
+            initial = ViewState.A(0) to null
+            onEach(topEvents) { transitionTo { _, _ -> ViewState.B("b") } }
+            whenIn<ViewState.A> {
+              onEach(eventsA) { transitionTo { _, v -> ViewState.A(v) } }
+            }
+          }
+
+          m.states.test {
+            awaitItem() shouldBe ViewState.A(0)
+            eventsA.subscriptionCount.first { it == 1 }
+            topEvents.subscriptionCount.first { it == 1 }
+
+            topEvents.emit(Unit)
+            awaitItem() shouldBe ViewState.B("b")
+
+            eventsA.emit(5)
+            topEvents.emit(Unit)
+            expectNoEvents()
+          }
+        }
+
+        should("complete when the current sub-state has no payload sources") {
+          val m = machine<ViewState> {
+            initial = ViewState.A(0) to null
+            whenIn<ViewState.A> {
+              onEach(flowOf(1)) { transitionTo { _, _ -> ViewState.B("b") } }
+            }
+          }
+
+          m.states.test {
+            awaitItem() shouldBe ViewState.A(0)
+            awaitItem() shouldBe ViewState.B("b")
+            awaitComplete()
+          }
+        }
+      }
+    }
+
+    context("machine") {
+      should("build from an explicit state class") {
+        val m = machine(ViewState::class) {
+          initial = ViewState.A(1) to null
+          whenIn<ViewState.A> {
+            onEach(flowOf(2)) { transitionTo { s, v -> s.copy(value = s.value + v) } }
+          }
+        }
+
+        m.states.test {
+          awaitItem() shouldBe ViewState.A(1)
+          awaitItem() shouldBe ViewState.A(3)
+          awaitComplete()
+        }
+      }
+
+      should("expose the configured initial state and action") {
+        val action: suspend (Int) -> Unit = {}
+        val m = machine<Int> { initial = 3 to action }
+
+        m.initial.first shouldBe 3
+        m.initial.second shouldBeSameInstanceAs action
+      }
+
+      should("run independently for each collector") {
+        var initialActionCount = 0
+        val m = machine<Int> {
+          initial = 0 to { initialActionCount += 1 }
+          onEach(flowOf(1, 2)) { transitionTo { s, p -> s + p } }
+        }
+
+        m.states.toList() shouldBe listOf(0, 1, 3)
+        m.states.toList() shouldBe listOf(0, 1, 3)
+        initialActionCount shouldBe 2
+      }
+    }
+
+    context("errors") {
+      should("fail states when transitionTo throws") {
+        val m = machine<Int> {
+          initial = 0 to null
+          onEach(flowOf(1)) { transitionTo { _, _ -> error("transition failed") } }
+        }
+
+        m.states.test {
+          awaitItem() shouldBe 0
+          awaitError().message shouldBe "transition failed"
+        }
+      }
+
+      should("fail states when action throws") {
+        val m = machine<Int> {
+          initial = 0 to null
+          onEach(flowOf(1)) {
+            transitionTo { s, p -> s + p }
+            action { _, _, _ -> error("action failed") }
+          }
+        }
+
+        m.states.test {
+          awaitItem() shouldBe 0
+          awaitItem() shouldBe 1
+          awaitError().message shouldBe "action failed"
+        }
+      }
+
+      should("fail states when a payload source throws") {
+        val m = machine<Int> {
+          initial = 0 to null
+          onEach(flow<Int> { error("source failed") }) { transitionTo { s, p -> s + p } }
+        }
+
+        m.states.test {
+          awaitItem() shouldBe 0
+          awaitError().message shouldBe "source failed"
         }
       }
     }

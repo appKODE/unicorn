@@ -33,4 +33,4 @@ jobs:
         run: ./gradlew --no-daemon --stacktrace spotlessCheck
 
       - name: Run tests
-        run: ./gradlew --no-daemon --stacktrace :unicorn2:jvmTest
+        run: ./gradlew --no-daemon --stacktrace :unicorn2:jvmTest :unicorn2:koverVerify
