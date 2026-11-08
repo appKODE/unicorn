@@ -17,7 +17,7 @@ internal fun <S : Any> createMachineConfig(machineDsl: MachineDsl<S>): MachineCo
     ?: error("initial transition is missing")
   return MachineConfig(
     initialStateConfig,
-    machineDsl.transitions.entries.flatMap { (stateClass, value) -> value.map { it.toTransitionConfig(stateClass) } }
+    machineDsl.transitions.entries.flatMap { (stateClass, value) -> value.map { it.toTransitionConfig(stateClass) } },
   )
 }
 
@@ -31,15 +31,13 @@ internal data class TransitionConfig<S : PS, PS : Any>(
 @Suppress("UNCHECKED_CAST") // we know the types here
 private fun <S : PS, PS : Any, P> TransitionDsl<S, PS, P>.toTransitionConfig(
   stateClass: KClass<out PS>,
-): TransitionConfig<PS, PS> {
-  return TransitionConfig(
-    stateClass = stateClass,
-    payloadSource = eventPayloads,
-    transition = { s: PS, p: Any? ->
-      // note that by casting "s" to "S" here it is assumed that this transition will only be run when in this
-      // sub-state and that this is enforced during flow construction (see MachineBuilder.kt)
-      this.transition?.invoke(s as S, p as P) ?: s
-    },
-    action = action as (suspend (PS, PS, Any?) -> Unit)?
-  )
-}
+): TransitionConfig<PS, PS> = TransitionConfig(
+  stateClass = stateClass,
+  payloadSource = eventPayloads,
+  transition = { s: PS, p: Any? ->
+    // note that by casting "s" to "S" here it is assumed that this transition will only be run when in this
+    // sub-state and that this is enforced during flow construction (see MachineBuilder.kt)
+    this.transition?.invoke(s as S, p as P) ?: s
+  },
+  action = action as (suspend (PS, PS, Any?) -> Unit)?,
+)

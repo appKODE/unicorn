@@ -10,9 +10,7 @@ import kotlin.reflect.KClass
 public annotation class StateMachineDsl
 
 @StateMachineDsl
-public class MachineDsl<S : Any> @PublishedApi internal constructor(
-  @PublishedApi internal val klass: KClass<out S>
-) {
+public class MachineDsl<S : Any> @PublishedApi internal constructor(@PublishedApi internal val klass: KClass<out S>) {
   public var initial: Pair<S, (suspend (S) -> Unit)?>? = null
 
   @PublishedApi

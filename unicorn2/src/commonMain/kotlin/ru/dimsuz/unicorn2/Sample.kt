@@ -14,16 +14,11 @@ public sealed class CompoundState {
   public data class State2(val price: Int) : CompoundState()
 
   public sealed class State3 : CompoundState() {
-    public data class State3a(
-      val i: Int,
-    ) : State3()
+    public data class State3a(val i: Int) : State3()
   }
 }
 
-public data class State(
-  val name: String,
-  val price: Int,
-)
+public data class State(val name: String, val price: Int)
 
 public val m1: Machine<CompoundState> = machine {
 

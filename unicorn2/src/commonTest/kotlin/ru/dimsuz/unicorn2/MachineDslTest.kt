@@ -6,6 +6,10 @@ import io.kotest.core.spec.style.ShouldSpec
 import io.kotest.matchers.collections.shouldContainExactly
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.types.shouldBeInstanceOf
+import io.kotest.matchers.types.shouldBeSameInstanceAs
+import io.kotest.property.Arb
+import io.kotest.property.arbitrary.int
+import io.kotest.property.arbitrary.list
 import io.kotest.property.checkAll
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -13,48 +17,74 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asFlow
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.emitAll
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.onStart
+import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.flow.updateAndGet
 import kotlin.time.ExperimentalTime
 
 @ExperimentalTime
-class MachineDslTest : ShouldSpec({
-  context("initial state") {
-    should("throw if not specified") {
-      shouldThrowMessage("initial transition is missing") {
-        machine<Unit> { }
+class MachineDslTest :
+  ShouldSpec({
+    context("initial state") {
+      should("throw if not specified") {
+        shouldThrowMessage("initial transition is missing") {
+          machine<Unit> { }
+        }
+      }
+
+      should("emit initial state first") {
+        val m = machine<Int> {
+          initial = 3 to null
+        }
+
+        m.states.test {
+          awaitItem() shouldBe 3
+          awaitComplete()
+        }
       }
     }
 
-    should("emit initial state first") {
-      val m = machine<Int> {
-        initial = 3 to null
+    context("transitions") {
+      should("perform transitions given streamed payloads") {
+        checkAll(100, Arb.list(Arb.int()), Arb.list(Arb.int())) { initialValue, payloads ->
+          // Arrange
+          val m = machine<List<Int>> {
+            initial = initialValue to null
+            onEach(payloads.asFlow()) {
+              transitionTo { state, payload -> state.plus(payload) }
+            }
+          }
+
+          // Assert
+          val awaitedStates = mutableListOf(initialValue)
+          payloads.mapTo(awaitedStates) { payload -> awaitedStates.last() + payload }
+
+          m.states.test {
+            awaitedStates.forEach { awaitedState ->
+              awaitItem() shouldBe awaitedState
+            }
+            awaitComplete()
+          }
+        }
       }
 
-      m.states.test {
-        awaitItem() shouldBe 3
-        awaitComplete()
-      }
-    }
-  }
-
-  context("transitions") {
-    should("perform transitions given streamed payloads") {
-      checkAll(iterations = 100) { initialValue: List<Int>, payloads: List<Int> ->
+      should("perform transitions given nullable streamed payloads") {
         // Arrange
-        val m = machine<List<Int>> {
-          initial = initialValue to null
-          onEach(payloads.asFlow()) {
+        val payloads = flowOf(3, null, 4, null, 5)
+        val m = machine<List<Int?>> {
+          initial = mutableListOf<Int?>() to null
+          onEach(payloads) {
             transitionTo { state, payload -> state.plus(payload) }
           }
         }
 
         // Assert
-        val awaitedStates = mutableListOf(initialValue)
-        payloads.mapTo(awaitedStates) { payload -> awaitedStates.last() + payload }
+        val awaitedStates = mutableListOf(emptyList<Int?>())
+        listOf(3, null, 4, null, 5).mapTo(awaitedStates) { payload -> awaitedStates.last() + payload }
 
         m.states.test {
           awaitedStates.forEach { awaitedState ->
@@ -63,419 +93,549 @@ class MachineDslTest : ShouldSpec({
           awaitComplete()
         }
       }
-    }
 
-    should("perform transitions given nullable streamed payloads") {
-      // Arrange
-      val payloads = flowOf(3, null, 4, null, 5)
-      val m = machine<List<Int?>> {
-        initial = mutableListOf<Int?>() to null
-        onEach(payloads) {
-          transitionTo { state, payload -> state.plus(payload) }
-        }
-      }
-
-      // Assert
-      val awaitedStates = mutableListOf(emptyList<Int?>())
-      listOf(3, null, 4, null, 5).mapTo(awaitedStates) { payload -> awaitedStates.last() + payload }
-
-      m.states.test {
-        awaitedStates.forEach { awaitedState ->
-          awaitItem() shouldBe awaitedState
-        }
-        awaitComplete()
-      }
-    }
-
-    should("execute initial action") {
-      val actionResult = MutableStateFlow<Int?>(null)
-      val m = machine<Int> {
-        initial = 3 to {
-          actionResult.emit(it * 2)
-        }
-      }
-
-      m.states.test {
-        awaitItem() shouldBe 3
-        awaitComplete()
-        actionResult.value shouldBe 6
-      }
-    }
-
-    should("not throw errors when no transitions in onEach-clause") {
-      // such machine is valid because it can contain actions to execute
-      val m = machine<List<Int>> {
-        initial = listOf(3) to null
-        onEach(flowOf(10)) {
-          action { _, _, _ -> /* do something awesome */ }
-        }
-      }
-
-      m.states.test {
-        awaitItem() shouldBe listOf(3)
-        awaitComplete()
-      }
-    }
-
-    should("call transition block only for specific streaming payloads") {
-      var firstBlockCallCount = 0
-      var secondBlockCallCount = 0
-      val m = machine<List<Int>> {
-        initial = listOf(3) to null
-        onEach(flowOf(10, 20, 30)) {
-          transitionTo { state, i ->
-            firstBlockCallCount += 1
-            state.plus(i)
-          }
-        }
-        onEach(flowOf("a", "b", "c")) {
-          transitionTo { state, s ->
-            secondBlockCallCount += 1
-            state.plus(s.length)
-          }
-        }
-      }
-
-      m.states.test {
-        repeat(7) { awaitItem() } // initial + 6 emissions
-        awaitComplete()
-        firstBlockCallCount shouldBe 3
-        secondBlockCallCount shouldBe 3
-      }
-    }
-
-    should("subscribe to streamed payloads only once") {
-      val count = MutableStateFlow(0)
-      val m = machine<List<Int>> {
-        initial = listOf(3) to null
-        onEach(flowOf(10, 20, 30).onStart { count.updateAndGet { it + 1 } }) {
-          transitionTo { state, i -> state.plus(i) }
-        }
-      }
-
-      m.states.test {
-        repeat(4) { awaitItem() } // initial + 3 emissions
-        awaitComplete()
-      }
-
-      count.value shouldBe 1
-    }
-
-    should("conflate state, but perform actions") {
-      val callCount = MutableStateFlow(0)
-      val m = machine<Int> {
-        initial = 0 to null
-        onEach(flowOf(1, 2, 3)) {
-          transitionTo { state, payload ->
-            42
-          }
-
-          action { _, _, _ ->
-            callCount.update { it + 1 }
-          }
-        }
-      }
-
-      m.states.test {
-        awaitItem() shouldBe 0
-        awaitItem() shouldBe 42
-        awaitComplete()
-
-        callCount.value shouldBe 3
-      }
-    }
-  }
-
-  context("actions") {
-    should("execute initial action if specified") {
-      var executed = false
-      val m = machine<Int> {
-        initial = 3 to { executed = true }
-      }
-
-      m.states.test {
-        // Act
-        awaitItem()
-        awaitComplete()
-
-        // Assert
-        executed shouldBe true
-      }
-    }
-
-    should("execute action in onEach-clause on each emission") {
-      var count = 0
-      val m = machine<List<Int>> {
-        initial = listOf(3) to null
-        onEach(flowOf(1, 2, 3, 4)) {
-          transitionTo { state, i -> state.plus(i) }
-          action { _, _, _ -> count += 1 }
-        }
-      }
-
-      m.states.test {
-        // Act
-        repeat(5) {
-          awaitItem()
-        }
-        awaitComplete()
-
-        // Assert
-        count shouldBe 4
-      }
-    }
-
-    should("execute action in onEach-clause with correct arguments") {
-      val arguments: MutableList<ActionArgs<List<Int>, Int>> = arrayListOf()
-      val m = machine<List<Int>> {
-        initial = listOf(3) to null
-        onEach(flowOf(1, 2, 3)) {
-          transitionTo { state, payload -> state.plus(payload) }
-          action { prevState, newState, payload ->
-            arguments.add(
-              ActionArgs(
-                prevState,
-                newState,
-                payload
-              )
-            )
-          }
-        }
-      }
-
-      m.states.test {
-        // Act
-        repeat(4) {
-          awaitItem()
-        }
-        awaitComplete()
-
-        // Assert
-        arguments shouldContainExactly listOf(
-          ActionArgs(listOf(3), listOf(3, 1), 1),
-          ActionArgs(
-            listOf(3, 1),
-            listOf(3, 1, 2),
-            2
-          ),
-          ActionArgs(
-            listOf(3, 1, 2),
-            listOf(3, 1, 2, 3),
-            3
-          )
-        )
-      }
-    }
-
-    should("execute action in onEach only once per reduce") {
-      var count = 0
-      val m = machine<Int> {
-        initial = 0 to null
-
-        onEach(flowOf("1", "2", "3")) {
-          action { _, _, _ ->
-            count += 1
-          }
-        }
-      }
-
-      m.states.test {
-        awaitItem()
-        awaitComplete()
-
-        count shouldBe 3
-      }
-    }
-  }
-
-  context("substate") {
-    context("transitions") {
-      should("perform transitions corresponding to substate branch") {
-        val flow1 = flowOf(1, 2, 3)
-        val flow2 = flowOf("bar", "baz").delayUntilCompletionOf(flow1)
-
-        val machine = machine<ViewState> {
-          initial = ViewState.A(value = 3) to null
-
-          whenIn<ViewState.A> {
-            onEach(flow1) {
-              transitionTo { state, v -> if (v != 3) state.copy(value = state.value + v) else ViewState.B("foo") }
-            }
-          }
-
-          whenIn<ViewState.B> {
-            onEach(flow2) {
-              transitionTo { state, v -> state.copy(value = state.value + v) }
-            }
+      should("execute initial action") {
+        val actionResult = MutableStateFlow<Int?>(null)
+        val m = machine<Int> {
+          initial = 3 to {
+            actionResult.emit(it * 2)
           }
         }
 
-        machine.states.test {
-          awaitItem() shouldBe ViewState.A(value = 3)
-          awaitItem() shouldBe ViewState.A(value = 4)
-          awaitItem() shouldBe ViewState.A(value = 6)
-          awaitItem() shouldBe ViewState.B(value = "foo")
-          awaitItem() shouldBe ViewState.B(value = "foobar")
-          awaitItem() shouldBe ViewState.B(value = "foobarbaz")
+        m.states.test {
+          awaitItem() shouldBe 3
           awaitComplete()
+          actionResult.value shouldBe 6
         }
       }
 
-      should("ignore events for inactive sub-states") {
-        val eventsI = MutableSharedFlow<Int>()
-        val eventsS = MutableSharedFlow<String>()
-
-        val machine = machine<ViewState> {
-          initial = ViewState.B(value = "hi") to null
-
-          whenIn<ViewState.A> {
-            onEach(eventsI) {
-              transitionTo { state, v -> if (v != 42) state.copy(value = v) else ViewState.B("foo") }
-            }
-          }
-
-          whenIn<ViewState.B> {
-            onEach(eventsS) {
-              transitionTo { state, v -> if (v != "42") state.copy(value = v) else ViewState.A(42) }
-            }
-          }
-        }
-
-        machine.states.test {
-          awaitItem() shouldBe ViewState.B("hi")
-
-          eventsI.emit(1) // should be ignored
-          eventsI.emit(2) // should be ignored
-          eventsS.emit("foo")
-          awaitItem() shouldBe ViewState.B("foo")
-
-          eventsS.emit("42")
-          awaitItem() shouldBe ViewState.A(42)
-
-          eventsI.emit(1)
-          eventsS.emit("hi")
-          eventsS.emit("there")
-          eventsI.emit(2)
-          awaitItem() shouldBe ViewState.A(1)
-          awaitItem() shouldBe ViewState.A(2)
-
-          eventsI.emit(42)
-          awaitItem() shouldBe ViewState.B("foo")
-        }
-      }
-
-      should("trigger parent state transitions and actions on child events") {
-        val events = MutableSharedFlow<String>()
-        val actionCallCounts = hashMapOf<String, Int>()
-        val m = machine<NestedState> {
-          initial = NestedState.State1("a") to null
-
-          onEach(events) {
+      should("not throw errors when no transitions in onEach-clause") {
+        // such machine is valid because it can contain actions to execute
+        val m = machine<List<Int>> {
+          initial = listOf(3) to null
+          onEach(flowOf(10)) {
             action { _, _, _ ->
-              println("top-level receiving")
-              // NOTE! This doesn't represent "onEntry". It's incremented when **event** is received!
-              actionCallCounts.increment("top-level")
-            }
-          }
-
-          whenIn<NestedState.State1> {
-            onEach(events) {
-              transitionTo { _, _ ->
-                NestedState.State3.State3a(3)
-              }
-
-              action { _, _, _ ->
-                // NOTE! This doesn't represent "onEntry". It's incremented when **event** comes!
-                println("state1 receiving")
-                actionCallCounts.increment("state1")
-              }
-            }
-          }
-
-          whenIn<NestedState.State2> {
-            onEach(events) {
-              action { _, _, _ ->
-                actionCallCounts.increment("state2")
-              }
-            }
-          }
-
-          whenIn<NestedState.State3> {
-            onEach(events) {
-              action { _, _, _ ->
-                println("state3 receiving")
-                actionCallCounts.increment("state3")
-              }
-            }
-          }
-
-          whenIn<NestedState.State3.State3a> {
-            onEach(events) {
-              transitionTo { s, payload ->
-                if (payload == "3b") NestedState.State3.State3b(1) else s
-              }
-
-              action { _, _, _ ->
-                println("state3a receiving")
-                actionCallCounts.increment("state3.state3a")
-              }
-            }
-          }
-
-          whenIn<NestedState.State3.State3b> {
-            onEach(events) {
-              action { _, _, _ ->
-                actionCallCounts.increment("state3.state3b")
-              }
+              // do something awesome
             }
           }
         }
 
         m.states.test {
-          awaitItem() shouldBe NestedState.State1("a")
-          actionCallCounts shouldBe emptyMap()
+          awaitItem() shouldBe listOf(3)
+          awaitComplete()
+        }
+      }
 
-          events.emit("foo")
-          awaitItem().shouldBeInstanceOf<NestedState.State3.State3a>()
-          actionCallCounts shouldBe mapOf(
-            "top-level" to 1,
-            "state1" to 1,
-          )
+      should("call transition block only for specific streaming payloads") {
+        var firstBlockCallCount = 0
+        var secondBlockCallCount = 0
+        val m = machine<List<Int>> {
+          initial = listOf(3) to null
+          onEach(flowOf(10, 20, 30)) {
+            transitionTo { state, i ->
+              firstBlockCallCount += 1
+              state.plus(i)
+            }
+          }
+          onEach(flowOf("a", "b", "c")) {
+            transitionTo { state, s ->
+              secondBlockCallCount += 1
+              state.plus(s.length)
+            }
+          }
+        }
 
-          events.emit("foo") // staying in 3a, but updating counts
-          actionCallCounts shouldBe mapOf(
-            "top-level" to 2,
-            "state1" to 1,
-            "state3" to 1,
-            "state3.state3a" to 1,
-          )
+        m.states.test {
+          repeat(7) { awaitItem() } // initial + 6 emissions
+          awaitComplete()
+          firstBlockCallCount shouldBe 3
+          secondBlockCallCount shouldBe 3
+        }
+      }
 
-          events.emit("3b")
-          awaitItem().shouldBeInstanceOf<NestedState.State3.State3b>()
-          actionCallCounts shouldBe mapOf(
-            "top-level" to 3,
-            "state1" to 1,
-            "state3" to 2,
-            "state3.state3a" to 2,
-          )
+      should("subscribe to streamed payloads only once") {
+        val count = MutableStateFlow(0)
+        val m = machine<List<Int>> {
+          initial = listOf(3) to null
+          onEach(flowOf(10, 20, 30).onStart { count.updateAndGet { it + 1 } }) {
+            transitionTo { state, i -> state.plus(i) }
+          }
+        }
 
-          events.emit("foo")
-          actionCallCounts shouldBe mapOf(
-            "top-level" to 4,
-            "state1" to 1,
-            "state3" to 3,
-            "state3.state3a" to 2,
-            "state3.state3b" to 1,
+        m.states.test {
+          repeat(4) { awaitItem() } // initial + 3 emissions
+          awaitComplete()
+        }
+
+        count.value shouldBe 1
+      }
+
+      should("conflate state, but perform actions") {
+        val callCount = MutableStateFlow(0)
+        val m = machine<Int> {
+          initial = 0 to null
+          onEach(flowOf(1, 2, 3)) {
+            transitionTo { state, payload ->
+              42
+            }
+
+            action { _, _, _ ->
+              callCount.update { it + 1 }
+            }
+          }
+        }
+
+        m.states.test {
+          awaitItem() shouldBe 0
+          awaitItem() shouldBe 42
+          awaitComplete()
+
+          callCount.value shouldBe 3
+        }
+      }
+    }
+
+    context("actions") {
+      should("execute initial action if specified") {
+        var executed = false
+        val m = machine<Int> {
+          initial = 3 to { executed = true }
+        }
+
+        m.states.test {
+          // Act
+          awaitItem()
+          awaitComplete()
+
+          // Assert
+          executed shouldBe true
+        }
+      }
+
+      should("execute action in onEach-clause on each emission") {
+        var count = 0
+        val m = machine<List<Int>> {
+          initial = listOf(3) to null
+          onEach(flowOf(1, 2, 3, 4)) {
+            transitionTo { state, i -> state.plus(i) }
+            action { _, _, _ -> count += 1 }
+          }
+        }
+
+        m.states.test {
+          // Act
+          repeat(5) {
+            awaitItem()
+          }
+          awaitComplete()
+
+          // Assert
+          count shouldBe 4
+        }
+      }
+
+      should("execute action in onEach-clause with correct arguments") {
+        val arguments: MutableList<ActionArgs<List<Int>, Int>> = arrayListOf()
+        val m = machine<List<Int>> {
+          initial = listOf(3) to null
+          onEach(flowOf(1, 2, 3)) {
+            transitionTo { state, payload -> state.plus(payload) }
+            action { prevState, newState, payload ->
+              arguments.add(
+                ActionArgs(
+                  prevState,
+                  newState,
+                  payload,
+                ),
+              )
+            }
+          }
+        }
+
+        m.states.test {
+          // Act
+          repeat(4) {
+            awaitItem()
+          }
+          awaitComplete()
+
+          // Assert
+          arguments shouldContainExactly listOf(
+            ActionArgs(listOf(3), listOf(3, 1), 1),
+            ActionArgs(
+              listOf(3, 1),
+              listOf(3, 1, 2),
+              2,
+            ),
+            ActionArgs(
+              listOf(3, 1, 2),
+              listOf(3, 1, 2, 3),
+              3,
+            ),
           )
         }
       }
 
-      should("keep only payload sources active in a current sub-state") {
-        // TODO decide if the option to keep all connections is required
+      should("execute action in onEach only once per reduce") {
+        var count = 0
+        val m = machine<Int> {
+          initial = 0 to null
+
+          onEach(flowOf("1", "2", "3")) {
+            action { _, _, _ ->
+              count += 1
+            }
+          }
+        }
+
+        m.states.test {
+          awaitItem()
+          awaitComplete()
+
+          count shouldBe 3
+        }
       }
     }
-  }
-})
+
+    context("substate") {
+      context("transitions") {
+        should("perform transitions corresponding to substate branch") {
+          val flow1 = flowOf(1, 2, 3)
+          val flow2 = flowOf("bar", "baz").delayUntilCompletionOf(flow1)
+
+          val machine = machine<ViewState> {
+            initial = ViewState.A(value = 3) to null
+
+            whenIn<ViewState.A> {
+              onEach(flow1) {
+                transitionTo { state, v -> if (v != 3) state.copy(value = state.value + v) else ViewState.B("foo") }
+              }
+            }
+
+            whenIn<ViewState.B> {
+              onEach(flow2) {
+                transitionTo { state, v -> state.copy(value = state.value + v) }
+              }
+            }
+          }
+
+          machine.states.test {
+            awaitItem() shouldBe ViewState.A(value = 3)
+            awaitItem() shouldBe ViewState.A(value = 4)
+            awaitItem() shouldBe ViewState.A(value = 6)
+            awaitItem() shouldBe ViewState.B(value = "foo")
+            awaitItem() shouldBe ViewState.B(value = "foobar")
+            awaitItem() shouldBe ViewState.B(value = "foobarbaz")
+            awaitComplete()
+          }
+        }
+
+        should("ignore events for inactive sub-states") {
+          val eventsI = MutableSharedFlow<Int>()
+          val eventsS = MutableSharedFlow<String>()
+
+          val machine = machine<ViewState> {
+            initial = ViewState.B(value = "hi") to null
+
+            whenIn<ViewState.A> {
+              onEach(eventsI) {
+                transitionTo { state, v -> if (v != 42) state.copy(value = v) else ViewState.B("foo") }
+              }
+            }
+
+            whenIn<ViewState.B> {
+              onEach(eventsS) {
+                transitionTo { state, v -> if (v != "42") state.copy(value = v) else ViewState.A(42) }
+              }
+            }
+          }
+
+          machine.states.test {
+            awaitItem() shouldBe ViewState.B("hi")
+
+            eventsI.emit(1) // should be ignored
+            eventsI.emit(2) // should be ignored
+            eventsS.emit("foo")
+            awaitItem() shouldBe ViewState.B("foo")
+
+            eventsS.emit("42")
+            awaitItem() shouldBe ViewState.A(42)
+
+            eventsI.emit(1)
+            eventsS.emit("hi")
+            eventsS.emit("there")
+            eventsI.emit(2)
+            awaitItem() shouldBe ViewState.A(1)
+            awaitItem() shouldBe ViewState.A(2)
+
+            eventsI.emit(42)
+            awaitItem() shouldBe ViewState.B("foo")
+          }
+        }
+
+        should("trigger parent state transitions and actions on child events") {
+          val events = MutableSharedFlow<String>()
+          val actionCallCounts = hashMapOf<String, Int>()
+          val m = machine<NestedState> {
+            initial = NestedState.State1("a") to null
+
+            onEach(events) {
+              action { _, _, _ ->
+                println("top-level receiving")
+                // NOTE! This doesn't represent "onEntry". It's incremented when **event** is received!
+                actionCallCounts.increment("top-level")
+              }
+            }
+
+            whenIn<NestedState.State1> {
+              onEach(events) {
+                transitionTo { _, _ ->
+                  NestedState.State3.State3a(3)
+                }
+
+                action { _, _, _ ->
+                  // NOTE! This doesn't represent "onEntry". It's incremented when **event** comes!
+                  println("state1 receiving")
+                  actionCallCounts.increment("state1")
+                }
+              }
+            }
+
+            whenIn<NestedState.State2> {
+              onEach(events) {
+                action { _, _, _ ->
+                  actionCallCounts.increment("state2")
+                }
+              }
+            }
+
+            whenIn<NestedState.State3> {
+              onEach(events) {
+                action { _, _, _ ->
+                  println("state3 receiving")
+                  actionCallCounts.increment("state3")
+                }
+              }
+            }
+
+            whenIn<NestedState.State3.State3a> {
+              onEach(events) {
+                transitionTo { s, payload ->
+                  if (payload == "3b") NestedState.State3.State3b(1) else s
+                }
+
+                action { _, _, _ ->
+                  println("state3a receiving")
+                  actionCallCounts.increment("state3.state3a")
+                }
+              }
+            }
+
+            whenIn<NestedState.State3.State3b> {
+              onEach(events) {
+                action { _, _, _ ->
+                  actionCallCounts.increment("state3.state3b")
+                }
+              }
+            }
+          }
+
+          m.states.test {
+            awaitItem() shouldBe NestedState.State1("a")
+            actionCallCounts shouldBe emptyMap()
+
+            events.emit("foo")
+            awaitItem().shouldBeInstanceOf<NestedState.State3.State3a>()
+            actionCallCounts shouldBe mapOf(
+              "top-level" to 1,
+              "state1" to 1,
+            )
+
+            events.emit("foo") // staying in 3a, but updating counts
+            actionCallCounts shouldBe mapOf(
+              "top-level" to 2,
+              "state1" to 1,
+              "state3" to 1,
+              "state3.state3a" to 1,
+            )
+
+            events.emit("3b")
+            awaitItem().shouldBeInstanceOf<NestedState.State3.State3b>()
+            actionCallCounts shouldBe mapOf(
+              "top-level" to 3,
+              "state1" to 1,
+              "state3" to 2,
+              "state3.state3a" to 2,
+            )
+
+            events.emit("foo")
+            actionCallCounts shouldBe mapOf(
+              "top-level" to 4,
+              "state1" to 1,
+              "state3" to 3,
+              "state3.state3a" to 2,
+              "state3.state3b" to 1,
+            )
+          }
+        }
+
+        should("keep only payload sources active in a current sub-state") {
+          val eventsA = MutableSharedFlow<Int>()
+          val eventsB = MutableSharedFlow<String>()
+          val m = machine<ViewState> {
+            initial = ViewState.A(0) to null
+            whenIn<ViewState.A> {
+              onEach(eventsA) { transitionTo { _, v -> ViewState.B("b$v") } }
+            }
+            whenIn<ViewState.B> {
+              onEach(eventsB) { transitionTo { _, v -> ViewState.A(v.length) } }
+            }
+          }
+
+          m.states.test {
+            awaitItem() shouldBe ViewState.A(0)
+            eventsA.subscriptionCount.first { it == 1 }
+            eventsB.subscriptionCount.value shouldBe 0
+
+            eventsA.emit(1)
+            awaitItem() shouldBe ViewState.B("b1")
+            eventsB.subscriptionCount.first { it == 1 }
+            eventsA.subscriptionCount.first { it == 0 }
+
+            eventsB.emit("xy")
+            awaitItem() shouldBe ViewState.A(2)
+            eventsA.subscriptionCount.first { it == 1 }
+            eventsB.subscriptionCount.first { it == 0 }
+
+            // sources of a re-entered sub-state are subscribed again
+            eventsA.emit(3)
+            awaitItem() shouldBe ViewState.B("b3")
+          }
+        }
+
+        should("ignore events of a left sub-state after a top-level transition") {
+          // a top-level transition matches every state, so it doesn't restart subscriptions:
+          // A's sources stay subscribed in B and their events must be dropped
+          val topEvents = MutableSharedFlow<Unit>()
+          val eventsA = MutableSharedFlow<Int>()
+          val m = machine<ViewState> {
+            initial = ViewState.A(0) to null
+            onEach(topEvents) { transitionTo { _, _ -> ViewState.B("b") } }
+            whenIn<ViewState.A> {
+              onEach(eventsA) { transitionTo { _, v -> ViewState.A(v) } }
+            }
+          }
+
+          m.states.test {
+            awaitItem() shouldBe ViewState.A(0)
+            eventsA.subscriptionCount.first { it == 1 }
+            topEvents.subscriptionCount.first { it == 1 }
+
+            topEvents.emit(Unit)
+            awaitItem() shouldBe ViewState.B("b")
+
+            eventsA.emit(5)
+            topEvents.emit(Unit)
+            expectNoEvents()
+          }
+        }
+
+        should("complete when the current sub-state has no payload sources") {
+          val m = machine<ViewState> {
+            initial = ViewState.A(0) to null
+            whenIn<ViewState.A> {
+              onEach(flowOf(1)) { transitionTo { _, _ -> ViewState.B("b") } }
+            }
+          }
+
+          m.states.test {
+            awaitItem() shouldBe ViewState.A(0)
+            awaitItem() shouldBe ViewState.B("b")
+            awaitComplete()
+          }
+        }
+      }
+    }
+
+    context("machine") {
+      should("build from an explicit state class") {
+        val m = machine(ViewState::class) {
+          initial = ViewState.A(1) to null
+          whenIn<ViewState.A> {
+            onEach(flowOf(2)) { transitionTo { s, v -> s.copy(value = s.value + v) } }
+          }
+        }
+
+        m.states.test {
+          awaitItem() shouldBe ViewState.A(1)
+          awaitItem() shouldBe ViewState.A(3)
+          awaitComplete()
+        }
+      }
+
+      should("expose the configured initial state and action") {
+        val action: suspend (Int) -> Unit = {}
+        val m = machine<Int> { initial = 3 to action }
+
+        m.initial.first shouldBe 3
+        m.initial.second shouldBeSameInstanceAs action
+      }
+
+      should("run independently for each collector") {
+        var initialActionCount = 0
+        val m = machine<Int> {
+          initial = 0 to { initialActionCount += 1 }
+          onEach(flowOf(1, 2)) { transitionTo { s, p -> s + p } }
+        }
+
+        m.states.toList() shouldBe listOf(0, 1, 3)
+        m.states.toList() shouldBe listOf(0, 1, 3)
+        initialActionCount shouldBe 2
+      }
+    }
+
+    context("errors") {
+      should("fail states when transitionTo throws") {
+        val m = machine<Int> {
+          initial = 0 to null
+          onEach(flowOf(1)) { transitionTo { _, _ -> error("transition failed") } }
+        }
+
+        m.states.test {
+          awaitItem() shouldBe 0
+          awaitError().message shouldBe "transition failed"
+        }
+      }
+
+      should("fail states when action throws") {
+        val m = machine<Int> {
+          initial = 0 to null
+          onEach(flowOf(1)) {
+            transitionTo { s, p -> s + p }
+            action { _, _, _ -> error("action failed") }
+          }
+        }
+
+        m.states.test {
+          awaitItem() shouldBe 0
+          awaitItem() shouldBe 1
+          awaitError().message shouldBe "action failed"
+        }
+      }
+
+      should("fail states when a payload source throws") {
+        val m = machine<Int> {
+          initial = 0 to null
+          onEach(flow<Int> { error("source failed") }) { transitionTo { s, p -> s + p } }
+        }
+
+        m.states.test {
+          awaitItem() shouldBe 0
+          awaitError().message shouldBe "source failed"
+        }
+      }
+    }
+  })
 
 private fun <K> MutableMap<K, Int>.increment(key: K): MutableMap<K, Int> {
   val v = (this[key] ?: 0) + 1
@@ -483,11 +643,9 @@ private fun <K> MutableMap<K, Int>.increment(key: K): MutableMap<K, Int> {
   return this
 }
 
-private fun <T> Flow<T>.delayUntilCompletionOf(other: Flow<*>): Flow<T> {
-  return flow {
-    other.collect()
-    emitAll(this@delayUntilCompletionOf)
-  }
+private fun <T> Flow<T>.delayUntilCompletionOf(other: Flow<*>): Flow<T> = flow {
+  other.collect()
+  emitAll(this@delayUntilCompletionOf)
 }
 
 private sealed class ViewState {
@@ -500,12 +658,8 @@ private sealed class NestedState {
   data class State2(val price: Int) : NestedState()
 
   sealed class State3 : NestedState() {
-    data class State3a(
-      val i: Int,
-    ) : State3()
-    data class State3b(
-      val i: Int,
-    ) : State3()
+    data class State3a(val i: Int) : State3()
+    data class State3b(val i: Int) : State3()
   }
 }
 

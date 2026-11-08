@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.3.0
+
+* **New Maven groupId: `ru.kode`.** Use `ru.kode:unicorn2:2.3.0`; versions up to 2.2.0 stay at `ru.dimsuz:unicorn2`. The Kotlin package `ru.dimsuz.unicorn2` is unchanged.
+* Kotlin 2.3.20, kotlinx.coroutines 1.10.2.
+* Minimum JVM version is now 11 (was 1.8).
+* Apple targets: `iosArm64`, `iosSimulatorArm64`, `iosX64`, `macosArm64`, `macosX64`. `macosX64` is deprecated in Kotlin 2.3 and will be dropped once Kotlin removes it.
+* Published to Maven Central via the Central Portal; releases are automated with GitHub Actions.
+
 ## 2.2.0 - 2022-07-31
 
 * Remove support for `initialLazy` state. This complicates things for library users, because it results in a state machine which semantically has no defined initial state, it's "suspended". The better way to do this (if needed) is for consumer to suspend until the initial state is ready and only after that construct the machine.
